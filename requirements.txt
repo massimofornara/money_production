@@ -1,0 +1,5 @@
+flask==3.0.3
+flask-session==0.8.0
+stripe==11.5.0
+rich==13.9.4
+gunicorn==23.0.0
