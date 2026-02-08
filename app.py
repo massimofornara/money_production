@@ -13,8 +13,14 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY")
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
+# ================== STRIPE ==================
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+
+if not stripe.api_key or "sk_" not in stripe.api_key:
+    raise RuntimeError("STRIPE_SECRET_KEY non impostata!")
+if not STRIPE_PUBLISHABLE_KEY or "pk_" not in STRIPE_PUBLISHABLE_KEY:
+    raise RuntimeError("STRIPE_PUBLISHABLE_KEY non impostata!")
 
 DB_FILE = "money_production.db"
 
@@ -86,7 +92,7 @@ def register():
         return redirect(url_for("index"))
     return render_template("index.html", error=msg)
 
-# API per salvare PaymentMethod dal frontend
+# Salva PaymentMethod dal frontend
 @app.route("/api/save-payment-method", methods=["POST"])
 def save_payment_method():
     if "user" not in session:
@@ -109,7 +115,7 @@ def start_production():
         return jsonify({"error": "Non autenticato"}), 401
 
     data = request.json
-    amount_per_cycle = float(data.get("amount_per_cycle", 1000000))
+    amount_per_cycle = float(data.get("amount_per_cycle", 1000000.0))
     cycles = int(data.get("cycles", 5))
     user = session["user"]
 
@@ -119,11 +125,11 @@ def start_production():
             balance_after = balance_before + amount_per_cycle
             with get_db() as conn:
                 conn.execute("UPDATE users SET balance = ? WHERE name = ?", (balance_after, user))
-            log_transaction(user, "Ciclo produzione", amount_per_cycle, balance_before, balance_after)
+            log_transaction(user, f"Ciclo produzione", amount_per_cycle, balance_before, balance_after)
 
         final_balance = get_balance(user)
         if final_balance <= 0:
-            return jsonify({"error": "Saldo insufficiente"}), 400
+            return jsonify({"error": "Saldo insufficiente per il prelievo"}), 400
 
         pm_id = get_payment_method(user)
         if not pm_id:
@@ -147,7 +153,7 @@ def start_production():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Funzioni helper
+# ================== FUNZIONI HELPER ==================
 def get_balance(name):
     with get_db() as conn:
         row = conn.execute("SELECT balance FROM users WHERE name = ?", (name,)).fetchone()
@@ -176,7 +182,7 @@ def add_user(name, password, initial_balance=0.0):
         with get_db() as conn:
             conn.execute("INSERT INTO users (name, password_hash, balance) VALUES (?, ?, ?)",
                          (name, pw_hash, initial_balance))
-        return True, "Utente creato"
+        return True, "Utente creato con successo"
     except sqlite3.IntegrityError:
         return False, "Utente già esistente"
 
@@ -190,4 +196,3 @@ def hash_password(pw):
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
-
