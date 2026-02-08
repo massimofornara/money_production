@@ -1,5 +1,4 @@
 import os
-import sys
 import sqlite3
 import hashlib
 from datetime import datetime
@@ -9,34 +8,39 @@ from typing import Optional
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from flask_session import Session
 import stripe
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt, FloatPrompt, IntPrompt
+
+# ===============================================
+#   CARICA LE VARIABILI D'AMBIENTE
+# ===============================================
+# NON mettere mai chiavi nel codice!
+# Le chiavi devono essere impostate su Render (Environment) o in un file .env
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24).hex())
-app.config["SESSION_TYPE"] = "filesystem"
-Session(app)
 
-console = Console()
+# Chiave segreta Flask per le sessioni
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("FLASK_SECRET_KEY non è impostata nelle variabili d'ambiente!")
 
-DB_FILE = "money_production.db"
-
-# ================== CONFIGURAZIONE STRIPE ==================
+# Chiavi Stripe
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 
+# Controllo obbligatorio all'avvio
 if not stripe.api_key or "sk_" not in stripe.api_key:
-    console.print("[bold red]ERRORE CRITICO: STRIPE_SECRET_KEY non impostata![/bold red]")
-    console.print("Imposta la variabile d'ambiente prima di avviare:")
-    console.print("export STRIPE_SECRET_KEY='sk_live_xxxxxxxxxxxxxxxx'")
-    sys.exit(1)
+    raise RuntimeError("STRIPE_SECRET_KEY non valida o non impostata!")
 
 if not STRIPE_PUBLISHABLE_KEY or "pk_" not in STRIPE_PUBLISHABLE_KEY:
-    console.print("[bold red]ERRORE: STRIPE_PUBLISHABLE_KEY non impostata![/bold red]")
-    sys.exit(1)
+    raise RuntimeError("STRIPE_PUBLISHABLE_KEY non valida o non impostata!")
 
-# ================== DATABASE ==================
+app.config["SESSION_TYPE"] = "filesystem"
+Session(app)
+
+DB_FILE = "money_production.db"
+
+# ===============================================
+#   DATABASE
+# ===============================================
 @contextmanager
 def get_db():
     conn = sqlite3.connect(DB_FILE, timeout=10)
@@ -74,7 +78,9 @@ init_db()
 def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
-# ================== FUNZIONI CONSOLE / API ==================
+# ===============================================
+#   FUNZIONI UTENTE
+# ===============================================
 def add_user(name: str, password: str, initial_balance: float = 0.0):
     name = name.strip()
     if not name or not password:
@@ -121,13 +127,16 @@ def log_transaction(name: str, description: str, amount: float, before: float, a
             (name, ts, description, amount, before, after, payout_id)
         )
 
-# ================== ROUTES FLASK ==================
+# ===============================================
+#   ROUTES
+# ===============================================
 @app.route("/")
 def index():
     if "user" not in session:
         return redirect(url_for("login"))
-    balance = get_balance(session["user"])
-    return render_template("index.html", stripe_pk=STRIPE_PUBLISHABLE_KEY, user=session["user"], balance=balance or 0.0)
+    
+    balance = get_balance(session["user"]) or 0.0
+    return render_template("index.html", stripe_pk=STRIPE_PUBLISHABLE_KEY, user=session["user"], balance=balance)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -140,17 +149,6 @@ def login():
         return render_template("index.html", error="Credenziali errate")
     return render_template("index.html")
 
-@app.route("/register", methods=["POST"])
-def register():
-    name = request.form.get("name")
-    password = request.form.get("password")
-    success, msg = add_user(name, password)
-    if success:
-        session["user"] = name
-        return redirect(url_for("index"))
-    return render_template("index.html", error=msg)
-
-# Salva PaymentMethod dal frontend
 @app.route("/api/save-payment-method", methods=["POST"])
 def save_payment_method():
     if "user" not in session:
@@ -168,7 +166,6 @@ def save_payment_method():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Avvia produzione + prelievo
 @app.route("/api/start-production", methods=["POST"])
 def start_production():
     if "user" not in session:
@@ -180,7 +177,6 @@ def start_production():
     user = session["user"]
 
     try:
-        # Cicli di produzione
         for cycle in range(1, cycles + 1):
             balance_before = get_balance(user)
             balance_after = balance_before + amount_per_cycle
@@ -222,5 +218,5 @@ def start_production():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
-    # Modalità debug (locale)
+    # Solo per debug locale
     app.run(debug=True, host="0.0.0.0", port=5000)
