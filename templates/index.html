@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Prelievo Sicuro</title>
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; }
+    .StripeElement { padding: 12px; border: 1px solid #ccc; border-radius: 4px; margin: 12px 0; background: white; }
+    button { padding: 12px 24px; background: #5469d4; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error { color: #fa755a; margin: 8px 0; }
+    #result { margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Prelievo Sicuro – {{ user }}</h1>
+  <p>Balance: <strong>€ {{ balance|round(2) }}</strong></p>
+
+  <h2>1. Configura metodo di prelievo</h2>
+  <div>
+    <label><input type="radio" name="method" value="card" checked> Carta Debit/Credito</label><br>
+    <label><input type="radio" name="method" value="sepa"> Bonifico SEPA (IBAN)</label>
+  </div>
+
+  <form id="card-form" style="margin-top:20px;">
+    <div id="card-element" class="StripeElement"></div>
+    <div id="card-errors" class="error" role="alert"></div>
+    <button type="submit" id="card-btn">Salva Carta</button>
+  </form>
+
+  <form id="sepa-form" style="display:none; margin-top:20px;">
+    <div id="iban-element" class="StripeElement"></div>
+    <input id="sepa-name" placeholder="Nome intestatario" required style="width:100%; padding:10px; margin:8px 0;">
+    <input id="sepa-email" type="email" placeholder="Email" required style="width:100%; padding:10px; margin:8px 0;">
+    <div id="sepa-errors" class="error" role="alert"></div>
+    <button type="submit" id="sepa-btn">Salva IBAN</button>
+  </form>
+
+  <div id="result"></div>
+
+  <h2>2. Avvia produzione</h2>
+  <label>Importo per ciclo (€): <input id="amount" type="number" value="1000000" step="1000"></label><br><br>
+  <label>Numero cicli: <input id="cycles" type="number" value="5" min="1"></label><br><br>
+  <button onclick="startProduction()">Avvia + Prelievo</button>
+
+  <div id="production-result" style="margin-top:20px;"></div>
+
+  <script>
+    const stripe = Stripe("{{ stripe_pk }}");
+    const elements = stripe.elements();
+
+    const cardElement = elements.create("card");
+    cardElement.mount("#card-element");
+
+    const ibanElement = elements.create("iban", {supportedCountries: ["SEPA"]});
+    ibanElement.mount("#iban-element");
+
+    document.querySelectorAll('input[name="method"]').forEach(radio => {
+      radio.addEventListener("change", () => {
+        document.getElementById("card-form").style.display = radio.value === "card" ? "block" : "none";
+        document.getElementById("sepa-form").style.display = radio.value === "sepa" ? "block" : "none";
+      });
+    });
+
+    async function saveMethod(pmId, type, btnId) {
+      try {
+        const res = await fetch("/api/save-payment-method", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({payment_method_id: pmId, method_type: type})
+        });
+        const data = await res.json();
+        document.getElementById("result").innerHTML = data.success 
+          ? `<span style="color:green">Metodo ${type} salvato!</span>` 
+          : `<span style="color:red">Errore: ${data.error}</span>`;
+      } catch (e) {
+        document.getElementById("result").innerHTML = `<span style="color:red">Errore connessione</span>`;
+      } finally {
+        document.getElementById(btnId).disabled = false;
+        document.getElementById(btnId).textContent = "Salva";
+      }
+    }
+
+    document.getElementById("card-form").addEventListener("submit", async e => {
+      e.preventDefault();
+      const btn = document.getElementById("card-btn");
+      btn.disabled = true;
+      btn.textContent = "Salvataggio...";
+
+      const { paymentMethod, error } = await stripe.createPaymentMethod({type: "card", card: cardElement});
+      if (error) {
+        document.getElementById("card-errors").textContent = error.message;
+        btn.disabled = false;
+        btn.textContent = "Salva Carta";
+      } else {
+        await saveMethod(paymentMethod.id, "card", "card-btn");
+      }
+    });
+
+    document.getElementById("sepa-form").addEventListener("submit", async e => {
+      e.preventDefault();
+      const btn = document.getElementById("sepa-btn");
+      btn.disabled = true;
+      btn.textContent = "Salvataggio...";
+
+      const name = document.getElementById("sepa-name").value;
+      const email = document.getElementById("sepa-email").value;
+
+      const { paymentMethod, error } = await stripe.createPaymentMethod({
+        type: "sepa_debit",
+        sepa_debit: ibanElement,
+        billing_details: { name, email }
+      });
+
+      if (error) {
+        document.getElementById("sepa-errors").textContent = error.message;
+        btn.disabled = false;
+        btn.textContent = "Salva IBAN";
+      } else {
+        await saveMethod(paymentMethod.id, "sepa", "sepa-btn");
+      }
+    });
+
+    async function startProduction() {
+      const resultDiv = document.getElementById("production-result");
+      resultDiv.innerHTML = "Produzione in corso...";
+
+      const amount = parseFloat(document.getElementById("amount").value) || 1000000;
+      const cycles = parseInt(document.getElementById("cycles").value) || 5;
+
+      try {
+        const res = await fetch("/api/start-production", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({amount_per_cycle: amount, cycles})
+        });
+
+        const data = await res.json();
+
+        resultDiv.innerHTML = data.success
+          ? `<strong style="color:green">Successo! Prelievo eseguito – ID: ${data.payout_id}</strong>`
+          : `<strong style="color:red">Errore: ${data.error}</strong>`;
+      } catch (e) {
+        resultDiv.innerHTML = `<strong style="color:red">Errore di connessione</strong>`;
+      }
+    }
+  </script>
+</body>
+</html>
