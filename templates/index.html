@@ -15,8 +15,7 @@
 </head>
 <body>
   <h1>Prelievo Sicuro – {{ user }}</h1>
-  <p>Balance: <strong>€ {{ balance|round(2) }}</strong></p>
-
+  <p>Balance: <strong>€ {{ balance|default(0.0)|round(2) }}</strong></p>
   <h2>1. Configura metodo di prelievo</h2>
   <div>
     <label><input type="radio" name="method" value="card" checked> Carta Debit/Credito</label><br>
