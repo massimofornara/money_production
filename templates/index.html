@@ -72,7 +72,7 @@
 
   <script>
     // ================== INIZIALIZZAZIONE STRIPE ==================
-    const stripe = Stripe("{{ stripe_pk }}");
+    const stripe = Stripe("{{ pk_live_51RescFFg0ne9PIQaDRWDo9BY3tdsA2zIKGSpVod6LpWWrsklSGaubPsB63JoqGZs0Igiwu0Kxk8K2VqQShsTXVlg00eoEiKasz }}");
     const elements = stripe.elements();
 
     const cardElement = elements.create("card", {style: {base: {fontSize: "16px"}}});
