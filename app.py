@@ -9,24 +9,30 @@ from flask_session import Session
 import stripe
 
 app = Flask(__name__)
+
+# Carica secret key da variabile d'ambiente (obbligatoria su Render)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("FLASK_SECRET_KEY non impostata nelle variabili d'ambiente di Render!")
+
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-# ================== STRIPE ==================
+# Chiavi Stripe da variabili d'ambiente
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 
 if not stripe.api_key or "sk_" not in stripe.api_key:
-    raise RuntimeError("STRIPE_SECRET_KEY non impostata!")
+    raise RuntimeError("STRIPE_SECRET_KEY non valida o mancante!")
 if not STRIPE_PUBLISHABLE_KEY or "pk_" not in STRIPE_PUBLISHABLE_KEY:
-    raise RuntimeError("STRIPE_PUBLISHABLE_KEY non impostata!")
+    raise RuntimeError("STRIPE_PUBLISHABLE_KEY non valida o mancante!")
 
 DB_FILE = "money_production.db"
 
 @contextmanager
 def get_db():
     conn = sqlite3.connect(DB_FILE, timeout=10)
+    conn.row_factory = sqlite3.Row
     try:
         yield conn
     except Exception:
@@ -39,21 +45,23 @@ def get_db():
 
 def init_db():
     with get_db() as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS users
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      name TEXT UNIQUE NOT NULL,
-                      password_hash TEXT NOT NULL,
-                      balance REAL NOT NULL DEFAULT 0.0,
-                      stripe_pm_id TEXT)''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS logs
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                      user_name TEXT,
-                      timestamp TEXT,
-                      description TEXT,
-                      amount REAL,
-                      balance_before REAL,
-                      balance_after REAL,
-                      payout_id TEXT)''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            balance REAL NOT NULL DEFAULT 0.0,
+            stripe_pm_id TEXT
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_name TEXT,
+            timestamp TEXT,
+            description TEXT,
+            amount REAL,
+            balance_before REAL,
+            balance_after REAL,
+            payout_id TEXT
+        )''')
 
 init_db()
 
@@ -65,34 +73,40 @@ def hash_password(pw):
 def index():
     if "user" not in session:
         return redirect(url_for("login"))
+    
     balance = get_balance(session["user"]) or 0.0
     return render_template("index.html", stripe_pk=STRIPE_PUBLISHABLE_KEY, user=session["user"], balance=balance)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    error = None
     if request.method == "POST":
         name = request.form.get("name")
         password = request.form.get("password")
         if verify_user(name, password):
             session["user"] = name
             return redirect(url_for("index"))
-        return render_template("index.html", error="Credenziali errate")
-    return render_template("index.html", error=None)
+        error = "Credenziali errate"
+    return render_template("index.html", error=error, show_login=True)
 
 @app.route("/register", methods=["POST"])
 def register():
     name = request.form.get("name")
     password = request.form.get("password")
-    if not name or not password:
-        return render_template("index.html", error="Nome e password obbligatori")
-    
-    success, msg = add_user(name, password)
-    if success:
-        session["user"] = name
-        return redirect(url_for("index"))
-    return render_template("index.html", error=msg)
+    error = None
 
-# Salva PaymentMethod dal frontend
+    if not name or not password:
+        error = "Nome e password obbligatori"
+    else:
+        success, msg = add_user(name, password)
+        if success:
+            session["user"] = name
+            return redirect(url_for("index"))
+        error = msg
+
+    return render_template("index.html", error=error, show_login=False)
+
+# API per salvare il metodo di pagamento
 @app.route("/api/save-payment-method", methods=["POST"])
 def save_payment_method():
     if "user" not in session:
@@ -103,10 +117,12 @@ def save_payment_method():
     if not pm_id:
         return jsonify({"error": "Nessun payment_method_id"}), 400
 
-    with get_db() as conn:
-        conn.execute("UPDATE users SET stripe_pm_id = ? WHERE name = ?", (pm_id, session["user"]))
-
-    return jsonify({"success": True, "message": "Metodo salvato correttamente"})
+    try:
+        with get_db() as conn:
+            conn.execute("UPDATE users SET stripe_pm_id = ? WHERE name = ?", (pm_id, session["user"]))
+        return jsonify({"success": True, "message": "Metodo di pagamento salvato"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # Avvia produzione + prelievo
 @app.route("/api/start-production", methods=["POST"])
@@ -120,12 +136,13 @@ def start_production():
     user = session["user"]
 
     try:
-        for _ in range(cycles):
+        # Esegui i cicli
+        for cycle in range(1, cycles + 1):
             balance_before = get_balance(user)
             balance_after = balance_before + amount_per_cycle
             with get_db() as conn:
                 conn.execute("UPDATE users SET balance = ? WHERE name = ?", (balance_after, user))
-            log_transaction(user, f"Ciclo produzione", amount_per_cycle, balance_before, balance_after)
+            log_transaction(user, f"Ciclo {cycle}/{cycles}", amount_per_cycle, balance_before, balance_after)
 
         final_balance = get_balance(user)
         if final_balance <= 0:
@@ -148,8 +165,15 @@ def start_production():
 
         log_transaction(user, "PRELIEVO FINALE", -final_balance, final_balance, 0.0, payout.id)
 
-        return jsonify({"success": True, "payout_id": payout.id, "amount": final_balance})
+        return jsonify({
+            "success": True,
+            "payout_id": payout.id,
+            "amount": final_balance,
+            "status": payout.status
+        })
 
+    except stripe.error.StripeError as e:
+        return jsonify({"error": e.user_message or str(e)}), 400
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
