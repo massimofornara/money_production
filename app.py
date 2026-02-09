@@ -9,16 +9,13 @@ from flask_session import Session
 import stripe
 
 app = Flask(__name__)
-
-# Carica secret key da variabile d'ambiente (obbligatoria su Render)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 if not app.secret_key:
-    raise RuntimeError("FLASK_SECRET_KEY non impostata nelle variabili d'ambiente di Render!")
+    raise RuntimeError("FLASK_SECRET_KEY non impostata nelle variabili d'ambiente!")
 
 app.config["SESSION_TYPE"] = "filesystem"
 Session(app)
 
-# Chiavi Stripe da variabili d'ambiente
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 
@@ -106,7 +103,6 @@ def register():
 
     return render_template("index.html", error=error, show_login=False)
 
-# API per salvare il metodo di pagamento
 @app.route("/api/save-payment-method", methods=["POST"])
 def save_payment_method():
     if "user" not in session:
@@ -120,11 +116,10 @@ def save_payment_method():
     try:
         with get_db() as conn:
             conn.execute("UPDATE users SET stripe_pm_id = ? WHERE name = ?", (pm_id, session["user"]))
-        return jsonify({"success": True, "message": "Metodo di pagamento salvato"})
+        return jsonify({"success": True, "message": "Metodo salvato correttamente"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Avvia produzione + prelievo
 @app.route("/api/start-production", methods=["POST"])
 def start_production():
     if "user" not in session:
@@ -136,7 +131,6 @@ def start_production():
     user = session["user"]
 
     try:
-        # Esegui i cicli
         for cycle in range(1, cycles + 1):
             balance_before = get_balance(user)
             balance_after = balance_before + amount_per_cycle
@@ -177,7 +171,7 @@ def start_production():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ================== FUNZIONI HELPER ==================
+# ================== HELPER ==================
 def get_balance(name):
     with get_db() as conn:
         row = conn.execute("SELECT balance FROM users WHERE name = ?", (name,)).fetchone()
@@ -206,7 +200,7 @@ def add_user(name, password, initial_balance=0.0):
         with get_db() as conn:
             conn.execute("INSERT INTO users (name, password_hash, balance) VALUES (?, ?, ?)",
                          (name, pw_hash, initial_balance))
-        return True, "Utente creato con successo"
+        return True, "Utente creato"
     except sqlite3.IntegrityError:
         return False, "Utente già esistente"
 
@@ -214,9 +208,6 @@ def verify_user(name, password):
     with get_db() as conn:
         row = conn.execute("SELECT password_hash FROM users WHERE name = ?", (name,)).fetchone()
         return row and hash_password(password) == row["password_hash"]
-
-def hash_password(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
