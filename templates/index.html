@@ -9,16 +9,19 @@
     body { font-family: Arial, sans-serif; max-width: 720px; margin: 40px auto; padding: 20px; background: #f5f5f5; }
     .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
     h1, h2 { text-align: center; }
-    .error { color: #dc2626; font-weight: bold; text-align: center; }
-    .success { color: #16a34a; font-weight: bold; text-align: center; }
+    .error { color: #dc2626; font-weight: bold; text-align: center; margin: 10px 0; }
+    .success { color: #16a34a; font-weight: bold; text-align: center; margin: 10px 0; }
     .StripeElement { padding: 12px; border: 1px solid #ccc; border-radius: 6px; margin: 10px 0; background: white; height: 42px; }
     button { width: 100%; padding: 14px; background: #4f46e5; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; margin: 10px 0; }
     button:disabled { background: #9ca3af; cursor: not-allowed; }
-    input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ccc; border-radius: 6px; }
+    input { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
     label { display: block; margin: 12px 0 6px; font-weight: 500; }
+    form { margin: 20px 0; }
+    .section { margin: 40px 0; padding: 20px; background: #fafafa; border-radius: 10px; }
   </style>
 </head>
 <body>
+
   <div class="container">
     <h1>Prelievo Sicuro</h1>
 
@@ -30,39 +33,41 @@
       <p style="text-align:center;">Utente: <strong>{{ user }}</strong></p>
       <p style="text-align:center;">Saldo attuale: <strong>€ {{ balance|default(0.0)|round(2) }}</strong></p>
 
-      <h2>1. Configura metodo di prelievo</h2>
-      <div>
-        <label><input type="radio" name="method" value="card" checked> Carta di debito/credito</label>
-        <label><input type="radio" name="method" value="sepa"> Bonifico SEPA (IBAN)</label>
+      <div class="section">
+        <h2>1. Configura metodo di prelievo</h2>
+        <div style="margin-bottom: 20px;">
+          <label><input type="radio" name="method" value="card" checked> Carta di debito/credito</label>
+          <label><input type="radio" name="method" value="sepa"> Bonifico SEPA (IBAN)</label>
+        </div>
+
+        <form id="card-form">
+          <div id="card-element" class="StripeElement"></div>
+          <div id="card-errors" class="error"></div>
+          <button type="submit" id="card-btn">Salva Carta</button>
+        </form>
+
+        <form id="sepa-form" style="display:none;">
+          <div id="iban-element" class="StripeElement"></div>
+          <input id="sepa-name" placeholder="Nome intestatario" required>
+          <input id="sepa-email" type="email" placeholder="Email (opzionale)">
+          <div id="sepa-errors" class="error"></div>
+          <button type="submit" id="sepa-btn">Salva IBAN</button>
+        </form>
+
+        <div id="result"></div>
       </div>
 
-      <form id="card-form">
-        <div id="card-element" class="StripeElement"></div>
-        <div id="card-errors" class="error"></div>
-        <button type="submit" id="card-btn">Salva Carta</button>
-      </form>
+      <div class="section">
+        <h2>2. Avvia produzione e prelievo</h2>
+        <label>Importo per ciclo (€): <input id="amount" type="number" value="1000000" step="1000" min="1"></label>
+        <label>Numero cicli: <input id="cycles" type="number" value="5" min="1"></label>
+        <button onclick="startProduction()" id="start-btn">Avvia Produzione + Prelievo</button>
 
-      <form id="sepa-form" style="display:none;">
-        <div id="iban-element" class="StripeElement"></div>
-        <input id="sepa-name" placeholder="Nome intestatario" required>
-        <input id="sepa-email" type="email" placeholder="Email (opzionale)">
-        <div id="sepa-errors" class="error"></div>
-        <button type="submit" id="sepa-btn">Salva IBAN</button>
-      </form>
-
-      <div id="result"></div>
-
-      <hr style="margin:30px 0;">
-
-      <h2>2. Avvia produzione e prelievo</h2>
-      <label>Importo per ciclo (€): <input id="amount" type="number" value="1000000" step="1000"></label>
-      <label>Numero cicli: <input id="cycles" type="number" value="5" min="1"></label>
-      <button onclick="startProduction()" id="start-btn">Avvia Produzione + Prelievo</button>
-
-      <div id="production-result"></div>
+        <div id="production-result"></div>
+      </div>
 
     {% else %}
-      <!-- Registrazione e Login -->
+      <!-- Registrazione / Login -->
       <h2>Registrazione</h2>
       <form method="POST" action="{{ url_for('register') }}">
         <input name="name" placeholder="Nome utente" required>
@@ -80,6 +85,7 @@
   </div>
 
   <script>
+    // ================== STRIPE ==================
     const stripe = Stripe("{{ stripe_pk }}");
     const elements = stripe.elements();
 
@@ -89,13 +95,14 @@
     const ibanElement = elements.create("iban", {supportedCountries: ["SEPA"]});
     ibanElement.mount("#iban-element");
 
-    document.querySelectorAll('input[name="method"]').forEach(r => {
-      r.addEventListener("change", () => {
-        document.getElementById("card-form").style.display = r.value === "card" ? "block" : "none";
-        document.getElementById("sepa-form").style.display = r.value === "sepa" ? "block" : "none";
+    document.querySelectorAll('input[name="method"]').forEach(radio => {
+      radio.addEventListener("change", () => {
+        document.getElementById("card-form").style.display = radio.value === "card" ? "block" : "none";
+        document.getElementById("sepa-form").style.display = radio.value === "sepa" ? "block" : "none";
       });
     });
 
+    // Salva metodo
     async function saveMethod(pmId, type, btnId) {
       const btn = document.getElementById(btnId);
       btn.disabled = true;
@@ -109,10 +116,10 @@
         });
         const data = await res.json();
         document.getElementById("result").innerHTML = data.success 
-          ? `<span style="color:green">Metodo ${type} salvato con successo!</span>` 
-          : `<span style="color:red">Errore: ${data.error}</span>`;
+          ? `<div class="success">Metodo ${type} salvato!</div>` 
+          : `<div class="error">Errore: ${data.error || "Problema server"}</div>`;
       } catch (e) {
-        document.getElementById("result").innerHTML = `<span style="color:red">Errore di connessione</span>`;
+        document.getElementById("result").innerHTML = `<div class="error">Errore connessione</div>`;
       } finally {
         btn.disabled = false;
         btn.textContent = type === "card" ? "Salva Carta" : "Salva IBAN";
@@ -122,8 +129,11 @@
     document.getElementById("card-form").addEventListener("submit", async e => {
       e.preventDefault();
       const {paymentMethod, error} = await stripe.createPaymentMethod({type: "card", card: cardElement});
-      if (error) document.getElementById("card-errors").textContent = error.message;
-      else await saveMethod(paymentMethod.id, "card", "card-btn");
+      if (error) {
+        document.getElementById("card-errors").textContent = error.message;
+      } else {
+        await saveMethod(paymentMethod.id, "card", "card-btn");
+      }
     });
 
     document.getElementById("sepa-form").addEventListener("submit", async e => {
@@ -134,13 +144,16 @@
         sepa_debit: ibanElement,
         billing_details: { name }
       });
-      if (error) document.getElementById("sepa-errors").textContent = error.message;
-      else await saveMethod(paymentMethod.id, "sepa", "sepa-btn");
+      if (error) {
+        document.getElementById("sepa-errors").textContent = error.message;
+      } else {
+        await saveMethod(paymentMethod.id, "sepa", "sepa-btn");
+      }
     });
 
     async function startProduction() {
       const result = document.getElementById("production-result");
-      result.innerHTML = "Esecuzione in corso...";
+      result.innerHTML = "<div style='color:orange;'>Esecuzione in corso...</div>";
 
       const amount = parseFloat(document.getElementById("amount").value) || 1000000;
       const cycles = parseInt(document.getElementById("cycles").value) || 5;
@@ -154,10 +167,10 @@
         const data = await res.json();
 
         result.innerHTML = data.success 
-          ? `<span style="color:green">Successo! Prelievo eseguito (ID: ${data.payout_id})</span>`
-          : `<span style="color:red">Errore: ${data.error}</span>`;
+          ? `<div class="success">Successo! Prelievo eseguito (ID: ${data.payout_id})</div>`
+          : `<div class="error">Errore: ${data.error}</div>`;
       } catch (e) {
-        result.innerHTML = `<span style="color:red">Errore di connessione</span>`;
+        result.innerHTML = `<div class="error">Errore connessione al server</div>`;
       }
     }
   </script>
